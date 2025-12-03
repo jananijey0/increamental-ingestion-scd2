@@ -1,0 +1,191 @@
+from pyspark.sql.types import *
+from pyspark.sql.functions import *
+from delta.tables import DeltaTable
+
+
+full_file = '/Volumes/dbdemos2/demo_cdp_test/healthcare_data/patients_full.csv'
+increment_new_file = ''
+increment_update_file = ''
+
+df_full = spark.read.format('csv').option('header','true').load(full_file)
+df_new = spark.read.format('csv').option('header','true').load(increment_new_file)
+df_update = spark.read.format('csv').option('header','true').load(increment_update_file)
+
+display(df_full.join(df_update, 'patient_id', 'inner').select('patient_id'))
+# .show(truncate=False)
+
+print(df.select(col("patient_id")))
+
+def compute_row_hash(df):
+    exclude_columns = ['effective_start_date', 'effective_end_date', 'record_version', 'is_active', 'effective_start_dt', 'effective_end_dt', 'insert_dt', 'insert_ts', 'batch_id', 'is_current']
+    df_columns = [i for i in df.columns if i not in exclude_columns]
+    sorted_df_columns = sorted(df_columns)
+    hash_input = concat_ws('||', *[coalesce(col(columns).cast('string'), lit('NULL')) for columns in sorted_df_columns])
+    hash_data = sha2(hash_input, 256).alias('checksum')
+    return hash_data
+
+
+    # data = df_full.withColumn('checksum', compute_row_hash(df_full))
+# display(data)
+
+
+target_table = 'dbdemos2.demo_cdp_test.patients'
+
+
+%sql
+select * from dbdemos2.demo_cdp_test.patients
+
+# df = df_full.withColumns({
+#     'effective_start_ts': current_timestamp(),
+#     'effective_end_ts': current_timestamp(),
+#     'insert_dt': current_date(),
+#     'insert_ts': current_timestamp(),
+#     'batch_id': lit('batch_id'),
+#     'is_current': lit('Y') ,
+#     'checksum': compute_row_hash(df_full)
+# })
+
+# df = df_update.withColumns({
+#     'effective_start_ts': current_timestamp(),
+#     'effective_end_ts': current_timestamp(),
+#     'insert_dt': current_date(),
+#     'insert_ts': current_timestamp(),
+#     'batch_id': lit('batch_id'),
+#     'is_current': lit('Y') ,
+#     'checksum': compute_row_hash(df_update)
+# })
+
+df = df_new.withColumns({
+    'effective_start_ts': current_timestamp(),
+    'effective_end_ts': current_timestamp(),
+    'insert_dt': current_date(),
+    'insert_ts': current_timestamp(),
+    'batch_id': lit('batch_id'),
+    'is_current': lit('Y') ,
+    'checksum': compute_row_hash(df_new)
+})
+
+display(df)
+
+
+delta_table = DeltaTable.forName(spark, target_table)
+print(delta_table.toDF())
+
+
+# Get all the current active records from the delta table (is_current=='Y)
+current_active = delta_table.toDF().filter(col('is_current') == 'Y').select('patient_id', 'checksum').withColumnRenamed('checksum', 'old_checksum').withColumnRenamed('patient_id', 'target_patient_id')
+
+
+
+current_active.createOrReplaceTempView('current_active_records')
+df.createOrReplaceTempView('df_csv_data')
+
+
+
+display(current_active)
+
+%sql
+-- select * from df src
+-- where src.something
+
+
+comparison = (
+    df.alias('src').join(current_active.alias('target'), col('src.patient_id')==col('target.target_patient_id'), 'left')
+    .withColumn('action', 
+                when(col('target.target_patient_id').isNull(), lit('INSERT'))
+                .when(col('src.checksum') != col('target.old_checksum'), lit('UPDATE'))
+                .otherwise(lit('NO_CHANGE')))
+)
+
+
+comparison.createOrReplaceTempView('comparison')
+
+
+%sql
+select 
+*,
+case
+  when target.target_patient_id is null then 'INSERT'
+  when src.checksum <> target.old_checksum then 'UPDATE'
+  else 'No Change'
+end as action
+from df_csv_data src
+left join current_active_records target
+on src.patient_id = target.target_patient_id
+
+
+%sql
+select * from dbdemos2.demo_cdp_test.patients
+where CHECKSUM = '66211cae830ce3155d824f25957ea18efede8377a86a73ee5d1111c1b01c7e7a'
+
+
+
+display(comparison)
+
+
+# Check for insert and update recods
+to_insert = comparison.filter(col('action').isin('INSERT', 'UPDATE')).select('src.*')
+to_expire = comparison.filter(col('action') == 'UPDATE')
+
+
+display(to_insert)
+
+%sql
+select * from comparison 
+where action in ('INSERT', 'UPDATE')
+
+
+display(to_expire) 
+
+print(f'Inserting/Updating: {to_insert.count()} records')
+print(f'Old Version: {to_expire.count()} records')
+
+# Step 1: Expire all the old version, keep them in the table and mark them as 'N'
+if to_expire.count() > 0:
+    print(f'Expiring {to_expire.count()} records')
+    delta_table.alias('target').merge(
+        source = to_expire.alias('src'),
+        condition = "target.patient_id = src.patient_id and target.is_current='Y'"
+    ).whenMatchedUpdate(
+        set = {
+            'is_current': lit('N'),
+            'effective_end_ts': current_timestamp()
+        }
+    ).execute()
+
+
+    # Step 2: Insert new records 
+if to_insert.count() > 0:
+    print(f'Inserting {to_insert.count()} records')
+    delta_table.alias('target').merge(
+        to_insert.alias('src'),
+        col('target.patient_id') != col('src.patient_id')
+    ).whenNotMatchedInsertAll().execute()
+
+
+    # Step 3: Insert Updated records
+if to_insert.count() > 0:
+    print(f'Updating {to_insert.count()} records')
+    delta_table.alias('target').merge(
+        source = to_insert.alias('src'),
+        condition = expr('1=0') # never match --> force insert
+    ).whenNotMatchedInsertAll().execute()
+
+%sql
+select IS_CURRENT, count(*) from dbdemos2.demo_cdp_test.patients group by all
+
+
+%sql
+select is_current, * from dbdemos2.demo_cdp_test.patients 
+where 
+-- IS_CURRENT = 'N'
+patient_id = 'c2fd3892-0769-49a2-a46d-242b5da274d5'
+
+
+%sql
+truncate table dbdemos2.demo_cdp_test.patients;
+    
+select * from dbdemos2.demo_cdp_test.patients;
+    
+
+
