@@ -1,0 +1,401 @@
+%run ./common_functions 
+
+ # Execute SQL statements
+
+  def check_table_availability(table_name):
+    return spark.catalog.tableExists(table_name)
+
+
+def rewrite_env(table_name, ddl_statement):
+    env = dbutils.widgets.get('env')
+    table_name = table_name.replace('{env}', env)
+    ddl_statement = ddl_statement.replace('{env}', env)
+    return table_name, ddl_statement
+
+
+def execute_ddl(execute_type, table_name, ddl_statement):
+    execute_type = execute_type.lower()
+
+    table_name, ddl_statement = rewrite_env(table_name, ddl_statement)
+
+    table_exists = check_table_availability(table_name)
+
+    if execute_type == 'insert':
+        if table_exists:
+            logger.info("Exists")
+        else:
+            try:
+                spark.sql(ddl_statement)
+                logger.info(f'SQL executed successfully ')
+            except Exception as e:
+                logger.error(f"Error executing SQL: {e}")
+
+    elif execute_type in ['update', 'drop']:
+        if table_exists:
+            try:
+                spark.sql(ddl_statement)
+                logger.info(f'SQL executed successfully ')
+            except Exception as e:
+                logger.error(f"Error executing SQL: {e}")
+        else:
+            logger.info("Table does not exist")
+
+    else:
+        logger.info("Unknown function")
+
+
+#ddl statements
+
+#create patients table
+create_patients_table = """
+CREATE TABLE IF NOT EXISTS DBDEMOS2.DEMO_CDP_{env}.PATIENTS (
+    PATIENT_ID                      STRING             PRIMARY KEY  , 
+    CHECKSUM                        STRING                          ,
+    FIRST_NAME                      STRING             NOT NULL     ,
+    LAST_NAME                       STRING             NOT NULL     ,
+    FULL_NAME                       STRING                          ,
+    DOB                             DATE                            ,
+    AGE                             INT                             ,
+    GENDER                          STRING                          ,
+    ADDRESS                         STRING                          ,
+    CITY                            STRING                          ,
+    STATE                           STRING                          ,
+    ZIP_CODE                        STRING                          ,
+    COUNTRY                         STRING                          ,
+    PHONE                           STRING                          ,
+    EMAIL                           STRING                          ,
+    SSN                             STRING                          ,
+    INSURANCE_PROVIDER              STRING                          ,
+    MEMBER_ID                       STRING                          ,
+    POLICY_NUMBER                   STRING                          ,
+    GROUP_NUMBER                    STRING                          ,
+    MARITAL_STATUS                  STRING                          ,
+    EMPLOYMENT_STATUS               STRING                          ,
+    EFFECTIVE_START_TS              TIMESTAMP                       ,
+    EFFECTIVE_END_TS                TIMESTAMP                       ,
+    IS_CURRENT                      STRING              NOT NULL    ,
+    INSERT_DT                       DATE                NOT NULL    ,
+    INSERT_TS                       TIMESTAMP           NOT NULL    ,
+    BATCH_ID                        STRING              NOT NULL
+)
+USING DELTA ;
+"""
+execute_type = 'insert'
+table_name = 'dbdemos2.demo_cdp_{env}.patients'
+execute_ddl(execute_type, table_name, create_patients_table)
+
+#create lab results table
+
+  create_lab_results_table="""
+CREATE TABLE IF NOT EXISTS DBDEMOS2.DEMO_CDP_{env}.LABS (
+    LAB_ID                              STRING              PRIMARY KEY     ,
+    PATIENT_ID                          STRING              NOT NULL        ,
+    CHECKSUM                            STRING                              ,
+    ORDER_ID                            STRING                              ,
+    TEST_DATE                           DATE                                ,
+    RESULT_REPORTED_DATE                DATE                                ,
+    TEST_CODE                           STRING                              ,
+    TEST_NAME                           STRING                              ,
+    TEST_CATEGORY                       STRING                              ,
+    RESULT_VALUE_NUMERIC                DECIMAL(10,2)                       ,
+    RESULT_VALUE_TEXT                   STRING                              ,
+    REFERENCE_RANGE                     STRING                              ,
+    FLAG                                STRING                              ,
+    UNIT                                STRING                              ,
+    PERFORMING_LAB                      STRING                              ,
+    EFFECTIVE_START_TS                  TIMESTAMP                           ,
+    EFFECTIVE_END_TS                    TIMESTAMP                           ,
+    IS_CURRENT                          STRING              NOT NULL        ,
+    INSERT_DT                           DATE                NOT NULL        ,
+    INSERT_TS                           TIMESTAMP           NOT NULL        ,
+    BATCH_ID                            STRING              NOT NULL
+
+)
+USING DELTA;
+"""
+
+execute_type = 'insert'
+table_name = 'dbdemos2.demo_cdp_{env}.labs'
+execute_ddl(execute_type, table_name, create_lab_results_table)
+
+#create claims table
+  
+  
+  create_claims_table = """
+CREATE TABLE IF NOT EXISTS DBDEMOS2.DEMO_CDP_{env}.CLAIMS (
+    CLAIM_ID                            STRING              PRIMARY KEY     ,
+    PATIENT_ID                          STRING              NOT NULL        ,
+    CHECKSUM                            STRING                              ,
+    CLAIM_NUMBER                        STRING                              ,
+    CLAIM_DATE                          DATE                                ,
+    SERVICE_START_DATE                  DATE                                ,
+    SERVICE_END_DATE                    DATE                                ,
+    SUBMITTED_DATE                      DATE                                ,
+    PROCESSED_DATE                      DATE                                ,
+    DIAGNOSIS_CODE_PRIMARY              STRING                              ,
+    DIAGNOSIS_CODE_SECONDARY            STRING                              ,
+    PROCEDURE_CODE                      STRING                              ,
+    PROVIDER_NPI                        STRING                              ,
+    BILLED_AMOUNT                       DECIMAL(10,2)                       ,
+    ALLOWED_AMOUNT                      DECIMAL(10,2)                       ,
+    PAID_AMOUNT                         DECIMAL(10,2)                       ,
+    STATUS                              STRING                              ,
+    DENIAL_REASON                       STRING                              ,
+    CLAIM_TYPE                          STRING                              ,
+    FACILITY_TYPE                       STRING                              ,
+    EFFECTIVE_START_TS                  TIMESTAMP                           ,
+    EFFECTIVE_END_TS                    TIMESTAMP                           ,
+    IS_CURRENT                          STRING              NOT NULL        , 
+    INSERT_DT                           DATE                NOT NULL        ,
+    INSERT_TS                           TIMESTAMP           NOT NULL        ,
+    BATCH_ID                            STRING              NOT NULL 
+   )
+USING DELTA;
+"""
+execute_type = 'insert'
+table_name = 'dbdemos2.demo_cdp_{env}.claims'
+execute_ddl(execute_type, table_name, create_claims_table)
+
+
+#customer data stage
+
+
+  customer_data_stage = """
+CREATE OR REPLACE TABLE DBDEMOS2.DEMO_CDP_{env}.PATIENT_STAGE_DATA
+(
+    PATIENT_ID                          STRING                  NOT NULL,
+    FIRST_NAME                          STRING,
+    LAST_NAME                           STRING,
+    FULL_NAME                           STRING,
+    DOB                                 DATE,
+    AGE_CURRENT                         INT,
+    GENDER                              STRING,
+    ADDRESS                             STRING,
+    CITY                                STRING,
+    STATE                               STRING,
+    ZIP_CODE                            STRING,
+    PHONE                               STRING,
+    EMAIL                               STRING,
+    SSN_LAST4                           STRING,
+    INSURANCE_PROVIDER                  STRING,
+    MEMBER_ID                           STRING,
+    POLICY_NUMBER                       STRING,
+    GROUP_NUMBER                        STRING,
+    MARITAL_STATUS                      STRING,
+    EMPLOYMENT_STATUS                   STRING,
+
+    LATEST_LAB_ID                       STRING,
+    LATEST_LAB_TEST_NAME                STRING,
+    LATEST_LAB_TEST_DATE                DATE,
+    LATEST_LAB_REPORTED_DATE            DATE,
+    LATEST_LAB_TEST_CODE                STRING,
+    LATEST_LAB_TEST_CATEGORY            STRING,
+    LATEST_LAB_RESULT_NUMERIC           DECIMAL(18,4),
+    LATEST_LAB_RESULT_TEXT              STRING,
+    LATEST_LAB_REFERENCE_RANGE          STRING,
+    LATEST_LAB_FLAG                     STRING,
+    LATEST_LAB_UNIT                     STRING,
+    LATEST_LAB_PERFORMING_LAB           STRING,
+
+
+    TOTAL_LAB_TESTS                     INT,
+    TOTAL_ABNORMAL_RESULTS              INT,
+    TOTAL_CRITICAL_RESULTS              INT,
+
+    
+    EVER_HBA1C_TESTED                   STRING              COMMENT "Hemoglobin A1c (HBA1C)",
+    LATEST_HBA1C_VALUE                  DECIMAL(10,4)       COMMENT "Hemoglobin A1c (HBA1C)",
+    LATEST_HBA1C_RESULT_TEXT            STRING              COMMENT "Hemoglobin A1c (HBA1C)",
+    LATEST_HBA1C_DATE                   DATE                COMMENT "Hemoglobin A1c (HBA1C)",
+
+    EVER_TSH_TESTED                     STRING              COMMENT "Thyroid Stimulating Hormone (TSH)",
+    LATEST_TSH_VALUE                    DECIMAL(10,4)       COMMENT "Thyroid Stimulating Hormone (TSH)",
+    LATEST_TSH_RESULT_TEXT              STRING              COMMENT "Thyroid Stimulating Hormone (TSH)",
+    LATEST_TSH_DATE                     DATE                COMMENT "Thyroid Stimulating Hormone (TSH)",
+
+    EVER_VITAMIN_D_TESTED               STRING              COMMENT "Vitamin D",
+    LATEST_VITAMIN_D_VALUE              DECIMAL(10,4)       COMMENT "Vitamin D",
+    LATEST_VITAMIN_D_RESULT_TEXT        STRING              COMMENT "Vitamin D",
+    LATEST_VITAMIN_D_DATE               DATE                COMMENT "Vitamin D",
+
+    EVER_COVID_TESTED                   STRING              COMMENT "COVID-19 PCR",
+    LATEST_COVID_RESULT                 STRING              COMMENT "COVID-19 PCR",
+    LATEST_COVID_TEST_DATE              DATE                COMMENT "COVID-19 PCR",
+    LATEST_COVID_REPORTED_DATE          DATE                COMMENT "COVID-19 PCR",
+
+    TOTAL_CLAIMS                        INT,
+    TOTAL_BILLED_AMOUNT                 DECIMAL(18,2),
+    TOTAL_PAID_AMOUNT                   DECIMAL(18,2),
+    DENIED_CLAIM_COUNT                  INT,
+    LATEST_CLAIM_DATE                   DATE,
+
+    LOAD_DATE                           DATE                    NOT NULL,
+    LOAD_TIMESTAMP                      TIMESTAMP               NOT NULL,
+    CREATE_BATCH_ID                     STRING                  NOT NULL
+)
+USING DELTA
+TBLPROPERTIES (
+    delta.autoOptimize.optimizeWrite = true,
+    delta.autoOptimize.autoCompact = true
+);
+"""
+
+execute_type = 'insert'
+table_name = 'dbdemos2.demo_cdp_{env}.patient_stage_data'
+execute_ddl(execute_type, table_name, customer_data_stage)
+
+
+# delta.autoOptimize.optimizeWrite: Databricks automatically optimizes the file size and partitioning when data is written to the Delta table, which improves read performance.
+# delta.autoOptimize.autoCompact: Databricks automatically compacts small files into larger ones after a write operation. This reduces metadata overhead and improves subsequent read performance.
+
+
+
+  #customer data history
+
+  customer_data_history="""
+CREATE TABLE IF NOT EXISTS DBDEMOS2.DEMO_CDP_{env}.PATIENT_HISTORY_DATA
+(
+    PATIENT_SK                          BIGINT                  GENERATED ALWAYS AS IDENTITY,
+    PATIENT_ID                          STRING                  NOT NULL,
+    FIRST_NAME                          STRING,
+    LAST_NAME                           STRING,
+    FULL_NAME                           STRING,
+    DOB                                 DATE,
+    AGE_CURRENT                         INT,
+    GENDER                              STRING,
+    ADDRESS                             STRING,
+    CITY                                STRING,
+    STATE                               STRING,
+    ZIP_CODE                            STRING,
+    PHONE                               STRING,
+    EMAIL                               STRING,
+    SSN_LAST4                           STRING,
+    INSURANCE_PROVIDER                  STRING,
+    MEMBER_ID                           STRING,
+    POLICY_NUMBER                       STRING,
+    GROUP_NUMBER                        STRING,
+    MARITAL_STATUS                      STRING,
+    EMPLOYMENT_STATUS                   STRING,
+
+    LATEST_LAB_ID                       STRING,
+    LATEST_LAB_TEST_NAME                STRING,
+    LATEST_LAB_TEST_DATE                DATE,
+    LATEST_LAB_REPORTED_DATE            DATE,
+    LATEST_LAB_TEST_CODE                STRING,
+    LATEST_LAB_TEST_CATEGORY            STRING,
+    LATEST_LAB_RESULT_NUMERIC           DECIMAL(18,4),
+    LATEST_LAB_RESULT_TEXT              STRING,
+    LATEST_LAB_REFERENCE_RANGE          STRING,
+    LATEST_LAB_FLAG                     STRING,
+    LATEST_LAB_UNIT                     STRING,
+    LATEST_LAB_PERFORMING_LAB           STRING,
+
+    TOTAL_LAB_TESTS                     INT,
+    TOTAL_ABNORMAL_RESULTS              INT,
+    TOTAL_CRITICAL_RESULTS              INT,
+
+
+    EVER_HBA1C_TESTED                   STRING,
+    LATEST_HBA1C_VALUE                  DECIMAL(10,4),
+    LATEST_HBA1C_RESULT_TEXT            STRING,
+    LATEST_HBA1C_DATE                   DATE,
+
+    EVER_TSH_TESTED                     STRING,
+    LATEST_TSH_VALUE                    DECIMAL(10,4),
+    LATEST_TSH_RESULT_TEXT              STRING,
+    LATEST_TSH_DATE                     DATE,
+
+    EVER_VITAMIN_D_TESTED               STRING,
+    LATEST_VITAMIN_D_VALUE              DECIMAL(10,4),
+    LATEST_VITAMIN_D_RESULT_TEXT        STRING,
+    LATEST_VITAMIN_D_DATE               DATE,
+
+    EVER_COVID_TESTED                   STRING,
+    LATEST_COVID_RESULT                 STRING,
+    LATEST_COVID_TEST_DATE              DATE,
+    LATEST_COVID_REPORTED_DATE          DATE,
+
+    TOTAL_CLAIMS                        INT,
+    TOTAL_BILLED_AMOUNT                 DECIMAL(18,2),
+    TOTAL_PAID_AMOUNT                   DECIMAL(18,2),
+    DENIED_CLAIM_COUNT                  INT,
+    LATEST_CLAIM_DATE                   DATE,
+
+    EFFECTIVE_START_DATE                DATE                    NOT NULL,
+    EFFECTIVE_END_DATE                  DATE,
+    IS_CURRENT                          BOOLEAN                 NOT NULL,
+    LOAD_DATE                           DATE                    NOT NULL,
+    LOAD_TIMESTAMP                      TIMESTAMP               NOT NULL,
+    CREATE_BATCH_ID                     STRING                  NOT NULL
+)
+USING DELTA
+PARTITIONED BY (LOAD_DATE)
+TBLPROPERTIES (
+    delta.autoOptimize.optimizeWrite = true,
+    delta.autoOptimize.autoCompact = true
+);
+"""
+execute_type = 'insert'
+table_name = 'dbdemos2.demo_cdp_{env}.patient_history_data'
+execute_ddl(execute_type, table_name, customer_data_history)
+
+  #log table
+  
+log_table="""
+CREATE TABLE IF NOT EXISTS dbdemos2.demo_cdp_{env}.log (
+    job_name STRING NOT NULL,
+    source string,
+    target string,
+    status STRING,
+    insert_dt DATE,
+    insert_ts TIMESTAMP,
+	batch_id STRING not null
+)"""
+
+execute_type = 'insert'
+table_name = 'dbdemos2.demo_cdp_{env}.log'
+execute_ddl(execute_type, table_name, log_table)
+
+
+  #error table
+
+  
+
+  error_table="""
+CREATE TABLE IF NOT EXISTS dbdemos2.demo_cdp_{env}.error (
+    error_message string,
+    error_type STRING,
+    insert_dt DATE,
+    insert_ts TIMESTAMP,
+	batch_id STRING NOT NULL);
+"""
+execute_type = 'insert'
+table_name = 'dbdemos2.demo_cdp_{env}.error'
+execute_ddl(execute_type, table_name, error_table)
+
+
+  
+#config table
+
+
+  config_table="""
+CREATE TABLE IF NOT EXISTS dbdemos2.demo_cdp_{env}.config (
+    job_name string,
+    target_table STRING,
+    sql_path string,
+    load_type string,
+    source_type string,
+    file_name string,
+    json_path string,
+    data_quality_flag string,
+    data_quality_sql string,
+    vaccum_flag string,
+    insert_dt DATE,
+    insert_ts TIMESTAMP,
+	batch_id STRING
+ );
+"""
+execute_type = 'update'
+table_name = 'dbdemos2.demo_cdp_{env}.config'
+execute_ddl(execute_type, table_name, config_table)
+    
