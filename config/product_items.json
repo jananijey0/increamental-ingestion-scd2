@@ -1,0 +1,8 @@
+{
+    'path': '/Volumes/dbdemos2/demo_cdp_test/customer_datas/',
+    'file_format': 'csv',
+    'header': 'True',
+    'infer_schema': 'True',
+    'file_name': 'order_items_dataset',
+    'delimeter': ','
+}
