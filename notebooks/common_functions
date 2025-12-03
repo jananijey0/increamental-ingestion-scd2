@@ -1,0 +1,83 @@
+dbutils.widgets.text('env', 'test')
+
+import logging
+from datetime import datetime
+import uuid
+import json
+from delta.tables import DeltaTable
+from pyspark.sql.functions import current_date, current_timestamp, lit, col
+
+
+
+  def get_logger():
+    logger = logging.getLogger("custom_logger")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+
+    def log_print(level, message):
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{ts} - [{level}] {message}")
+
+    logger.debug = lambda message: log_print("DEBUG", message)
+    logger.info = lambda message: log_print("INFO", message)
+    logger.error = lambda message: log_print("ERROR", message)
+
+    return logger
+
+
+logger = get_logger()
+
+
+
+  
+  # Generate Batch ID
+
+def generate_batch_id():
+    return str(uuid.uuid4())
+
+BATCH_ID = generate_batch_id()
+
+
+
+# Write log to table
+def write_log(job_name, source, target, status, batch_id):
+    env = dbutils.widgets.get("env")
+    log_table = f"dbdemos2.demo_cdp_{env}.log".replace('{env}', env)
+    log_columns = ['job_name', 'source', 'target', 'status']
+    df_log = spark.createDataFrame([[job_name, source, target, status]], log_columns)
+    updated_df_log = df_log.withColumns({
+        'insert_dt': current_date(),
+        'insert_ts': current_timestamp(),
+        'batch_id': lit(batch_id)
+    })
+    try:
+        updated_df_log.write.format('delta').mode('append').saveAsTable(log_table)
+        logger.info(f"Log inserted successfully")
+    except Exception as e:
+        logger.error(f"Failed to insert log: {e}")
+
+
+write_log('job_name', 'source', 'target', 'status', 'batch_id')
+
+
+
+
+  # Write error to table
+def write_error(error_message, error_type, batch_id):
+    env = dbutils.widgets.get("env")
+    error_table = f"dbdemos2.demo_cdp_{env}.error".replace('{env}', env)
+    error_columns = ['error_message', 'error_type']
+    df_error = spark.createDataFrame([[error_message, error_type]], error_columns)
+    updated_df_error = df_error.withColumns({
+        'insert_dt': current_date(),
+        'insert_ts': current_timestamp(),
+        'batch_id': lit(batch_id)
+    })
+    try:
+        updated_df_error.write.format('delta').mode('append').saveAsTable(error_table)
+        logger.info(f"Error inserted successfully")
+    except Exception as e:
+        logger.error(f"Error inserting error: {e}")
+    
+  
