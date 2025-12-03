@@ -1,0 +1,209 @@
+%sql
+CREATE OR REPLACE VIEW dbdemos2.demo_cdp_test.vw_patients AS
+select * from ( select
+    PATIENT_ID as PATIENT_ID           ,
+    FIRST_NAME                         ,
+    LAST_NAME                          ,
+    FULL_NAME                          ,
+    DOB                                ,
+    AGE as AGE_CURRENT                 ,
+    GENDER                             ,
+    ADDRESS                            ,
+    CITY                               ,
+    STATE                              ,
+    ZIP_CODE                           ,
+    PHONE                              ,
+    EMAIL                              ,
+    SSN as SSN_LAST4                   ,
+    INSURANCE_PROVIDER                 ,
+    MEMBER_ID                          ,
+    POLICY_NUMBER                      ,
+    GROUP_NUMBER                       ,
+    MARITAL_STATUS                     ,
+    EMPLOYMENT_STATUS  from dbdemos2.DEMO_CDP_test.patients 
+    where  IS_CURRENT='Y'  
+     )  patients           
+
+
+%sql
+CREATE OR REPLACE VIEW dbdemos2.demo_cdp_test.vw_labs AS
+SELECT * FROM (
+  SELECT
+  patient_id,
+  lab_id as latest_lab_id,
+  TEST_NAME as LATEST_LAB_TEST_NAME,
+  TEST_DATE as LATEST_LAB_TEST_DATE ,
+  RESULT_REPORTED_DATE  as LATEST_LAB_REPORTED_DATE,
+  TEST_CODE as LATEST_LAB_TEST_CODE ,
+  TEST_CATEGORY as  LATEST_LAB_TEST_CATEGORY,
+  cast(RESULT_VALUE_NUMERIC as decimal(18,4)) as  LATEST_LAB_RESULT_NUMERIC,
+  RESULT_VALUE_TEXT  as   LATEST_LAB_RESULT_TEXT,
+  REFERENCE_RANGE as  LATEST_LAB_REFERENCE_RANGE,
+  FLAG  as  LATEST_LAB_FLAG,
+  UNIT as  LATEST_LAB_UNIT,
+  PERFORMING_LAB as  LATEST_LAB_PERFORMING_LAB,
+  ROW_NUMBER() OVER (PARTITION BY PATIENT_ID ORDER BY TEST_DATE DESC ) AS LATEST,
+  COUNT(*) OVER (PARTITION BY PATIENT_ID) AS TOTAL_LAB_TESTS ,
+  SUM(
+        CASE 
+            WHEN FLAG IS NOT NULL AND FLAG IN ('High','Low') THEN 1
+            ELSE 0
+        END
+    ) OVER (PARTITION BY PATIENT_ID) AS TOTAL_ABNORMAL_RESULTS,
+    SUM(
+        CASE 
+            WHEN FLAG IN ('Critical High', 'Critical Low') THEN 1
+            ELSE 0
+        END
+    ) OVER (PARTITION BY PATIENT_ID) AS TOTAL_CRITICAL_RESULTS,
+
+
+
+  --  Hemoglobin A1c
+  
+  --EVER TESTED HBA1C
+  MAX(CASE WHEN TEST_NAME = 'Hemoglobin A1c' THEN 'Y' ELSE 'N' END) OVER (PARTITION BY PATIENT_ID) as EVER_HBA1C_TESTED,
+  -- IF TESTED HBA1C THEN LATEST VALUE
+
+    cast(MAX(
+        CASE WHEN TEST_NAME = 'Hemoglobin A1c' THEN RESULT_VALUE_NUMERIC ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) as decimal(10,4) )AS LATEST_HBA1C_VALUE,
+
+-- IF TESTED HBA1C THEN LATEST TEXT
+
+   MAX(
+        CASE WHEN TEST_NAME = 'Hemoglobin A1c' THEN RESULT_VALUE_TEXT ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_HBA1C_RESULT_TEXT,
+
+-- IF TESTED HBA1C THEN LATEST DATE
+  MAX(
+        CASE WHEN TEST_NAME = 'Hemoglobin A1c' THEN TEST_DATE ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_HBA1C_DATE,
+
+
+
+-- Thyroid Stimulating Hormone(TSH)
+-- EVER TESTED TSH
+MAX(CASE WHEN TEST_NAME = 'TSH' THEN 'Y' ELSE 'N' END) OVER (PARTITION BY PATIENT_ID) as EVER_TSH_TESTED ,
+
+-- IF TESTED TSH THEN LATEST VALUE
+    cast(MAX(
+        CASE WHEN TEST_NAME = 'TSH' THEN RESULT_VALUE_NUMERIC ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) as decimal(10,4)) AS LATEST_TSH_VALUE,
+
+  -- IF TESTED TSH THEN LATEST TEXT
+MAX(
+        CASE WHEN TEST_NAME = 'TSH' THEN RESULT_VALUE_TEXT ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_TSH_RESULT_TEXT,
+
+
+-- IF TESTED TSH THEN LATEST DATE
+MAX(
+        CASE WHEN TEST_NAME = 'TSH' THEN TEST_DATE ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_TSH_DATE,
+
+
+-- Vitamin D
+-- EVER TESTED VITAMIN D
+
+MAX(CASE WHEN TEST_NAME = 'Vitamin D' THEN 'Y' ELSE 'N' END) OVER (PARTITION BY PATIENT_ID) as EVER_VITAMIN_D_TESTED ,
+
+-- IF TESTED VITAMIN D THEN LATEST VALUE
+    cast(MAX(
+        CASE WHEN TEST_NAME = 'Vitamin D' THEN RESULT_VALUE_NUMERIC ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) as decimal(10,4)) AS  LATEST_VITAMIN_D_VALUE,
+
+
+
+  -- IF TESTED VITAMIN D THEN LATEST TEXT
+  MAX(
+        CASE WHEN TEST_NAME = 'Vitamin D'  THEN RESULT_VALUE_TEXT ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_VITAMIN_D_RESULT_TEXT,
+
+
+-- IF TESTED VITAMIN D THEN LATEST DATE
+MAX(
+        CASE WHEN TEST_NAME = 'Vitamin D' THEN TEST_DATE ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_VITAMIN_D_DATE,
+
+
+
+--  COVID-19 PCR
+-- EVER TESTED COVID PCR
+MAX(CASE WHEN TEST_NAME = 'COVID-19 PCR' THEN 'Y' ELSE 'N' END) OVER (PARTITION BY PATIENT_ID) as 
+EVER_COVID_TESTED,
+
+-- IF TESTED COVID PCR THEN LATEST VALUE
+     MAX(
+        CASE WHEN TEST_NAME = 'COVID-19 PCR' THEN RESULT_VALUE_NUMERIC ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_COVID_RESULT,
+
+
+  -- IF TESTED COVID PCR THEN LATEST TEXT
+   MAX(
+        CASE WHEN TEST_NAME = 'COVID-19 PCR' THEN TEST_DATE ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_COVID_TEST_DATE,
+
+
+-- IF TESTED COVID PCR THEN LATEST DATE
+MAX(
+        CASE WHEN TEST_NAME = 'COVID-19 PCR' THEN RESULT_REPORTED_DATE ELSE NULL END
+    ) OVER (PARTITION BY PATIENT_ID) AS LATEST_COVID_REPORTED_DATE
+
+
+
+  FROM
+  DBDEMOS2.DEMO_CDP_test.LABS
+  where IS_CURRENT='Y'
+  
+) labs
+WHERE  labs.LATEST = 1
+
+
+
+%sql
+CREATE OR REPLACE VIEW dbdemos2.demo_cdp_test.vw_claims AS
+select * from
+(
+
+    select 
+    patient_id,
+    count(claim_id) over(partition by patient_id) as TOTAL_CLAIMS,
+    cast(sum(BILLED_AMOUNT) over(partition by patient_id) as decimal(18, 2)) as TOTAL_BILLED_AMOUNT,
+    cast(sum(coalesce(paid_amount,0)) over(partition by patient_id) as decimal(18,2)) as TOTAL_PAID_AMOUNT ,
+    count(case when status='Denied' then 1 else null end) over(partition by patient_id) as DENIED_CLAIM_COUNT,
+    max(claim_date) over (partition by patient_id) as LATEST_CLAIM_DATE
+     FROM
+  dbdemos2.demo_cdp_test.claims
+  where IS_CURRENT='Y'
+
+) claims
+
+
+%sql
+
+describe DBDEMOS2.DEMO_CDP_test.patient_stage_data
+
+# python regex
+# 1. remove the lines starting with --
+# 2. replace anything in the that is enclosed with {}
+
+# 4 CTE's
+# 1. Patients
+# 2. Labs
+# 3. Claims
+# 4. Stage - combined data of all three CTE's
+
+%sql
+CREATE OR REPLACE VIEW dbdemos2.demo_cdp_test.vw_stage_table AS
+select distinct p.patient_id,
+  p.* EXCEPT (patient_id),
+  l.* EXCEPT (patient_id,latest),
+  c.* EXCEPT (patient_id)
+ from dbdemos2.demo_cdp_test.vw_patients p
+left join dbdemos2.demo_cdp_test.vw_labs l on p.patient_id=l.patient_id
+left join dbdemos2.demo_cdp_test.vw_claims c on p.patient_id=c.patient_id
+
+
+%sql
+select * from dbdemos2.demo_cdp_test.vw_stage_table
