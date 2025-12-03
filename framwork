@@ -1,0 +1,204 @@
+
+%run ./notebooks/common_functions
+
+
+from pyspark.sql.types import *
+from pyspark.sql.functions import *
+from delta.tables import DeltaTable
+
+
+# dbutils.fs.ls('/Volumes/dbdemos2/demo_cdp_test/archive/patients')
+# dbutils.fs.mv(source_file, destination)
+
+
+class ETL_FRAMEWORK():
+    def __init__(self, job_name):
+
+        logger.info('Starting ETL Script')
+
+        self.JOB_NAME = job_name
+        self.CONFIG_TABLE = "dbdemos2.demo_cdp_{env}.config"
+        
+        # Values from config table
+        self.TARGET_TABLE = ''
+        self.SQL_PATH= ''
+        self.LOAD_TYPE = ''
+        self.SOURCE_TYPE = ''
+        self.FILE_NAME = ''
+        self.JSON_PATH = ''
+        self.JSON_DATA = ''
+
+        # Parsing config table name
+        self.get_parsed_data(table=True)
+        logger.info(f'Parsed config table name: {self.CONFIG_TABLE} \n')
+
+        logger.info('**************************************\n')
+
+        # Calling read config function
+        logger.info(f'Reading config data for job: {self.JOB_NAME}')
+        self.read_config_data()
+        logger.info(f'TARGET_TABLE: {self.TARGET_TABLE}')
+        logger.info(f'SQL_PATH: {self.SQL_PATH}')
+        logger.info(f'LOAD_TYPE: {self.LOAD_TYPE}')
+        logger.info(f'SOURCE_TYPE: {self.SOURCE_TYPE}')
+        logger.info(f'FILE_NAME: {self.FILE_NAME}')
+        logger.info(f'JSON_PATH: {self.JSON_PATH}\n')
+
+        logger.info('**************************************\n')                                        
+
+        # Loading the JSON metadata file
+        logger.info(f'Reading json data')
+        self.JSON_DATA = self.read_json_data()
+        logger.info(f'JSON_DATA: {self.JSON_DATA}')
+
+        self.FILE_NAME = self.get_file_name()
+        print(self.FILE_NAME)
+
+        # If the source is a CSV file, start the CSV loading process
+        if self.SOURCE_TYPE == 'csv':
+            self.write_csv_data()
+
+
+
+    def get_parsed_data(self, table=False, sql=False):
+        # Replaces {env} in the table name
+        if table:
+            self.CONFIG_TABLE = self.CONFIG_TABLE.replace('{env}', dbutils.widgets.get('env'))
+
+        # Can use if SQL path needs replacements
+        if sql:
+            pass
+
+
+    def read_config_data(self):
+        # Get the config row for this job if jobname matches
+        config_df = spark.sql(f"select * from {self.CONFIG_TABLE} where job_name = '{self.JOB_NAME}'")
+
+        # Get each field from config
+        self.TARGET_TABLE = config_df.select(col('target_table')).first()[0]
+        self.SQL_PATH = config_df.select(col('sql_path')).first()[0]
+        self.LOAD_TYPE = config_df.select(col('load_type')).first()[0]
+        self.SOURCE_TYPE = config_df.select(col('source_type')).first()[0]
+        # self.FILE_NAME = config_df.select(col('file_name')).first()[0]
+        self.JSON_PATH = config_df.select(col('json_path')).first()[0]
+
+
+    def read_json_data(self):
+        # Opening and reading the JSON file specified in the volume
+        with open(self.JSON_PATH, 'r') as file:
+            return json.load(file)
+    
+    def get_file_name(self):
+        file_path = f"{self.JSON_DATA['path']}"
+        files = dbutils.fs.ls(file_path)
+        file_name = [i.name for i in files if i.name.startswith(self.JSON_DATA['file_name'])]
+        return file_name[0]
+        
+    def compute_row_hash(self,df):
+        exclude_columns = ['effective_start_date', 'effective_end_date', 'record_version', 'is_active', 'effective_start_dt', 'effective_end_dt', 'insert_dt', 'insert_ts', 'batch_id', 'is_current']
+        df_columns = [i for i in df.columns if i not in exclude_columns]
+        sorted_df_columns = sorted(df_columns)
+        hash_input = concat_ws('||', *[coalesce(col(columns).cast('string'), lit('NULL')) for columns in sorted_df_columns])
+        hash_data = sha2(hash_input, 256).alias('checksum')
+        return hash_data
+       
+
+    def write_csv_data(self):
+        try:
+            # Building full file path from JSON
+            file_name = f"{self.JSON_DATA['path']}{self.FILE_NAME}" # Updated
+            print(file_name)
+            # Reading CSV file using Spark
+            csv_data = (
+                spark.read.option("header", self.JSON_DATA["header"])
+                .option("inferSchema", self.JSON_DATA["infer_schema"])
+                .option("delimiter", self.JSON_DATA["delimeter"])
+                .csv(file_name)
+            )
+            
+
+            if self.LOAD_TYPE == 'full':
+                #Adding 3 extra columns(Current date, current time, batch id)
+                updated_csv_data = (
+                    csv_data
+                    .withColumn("effective_start_ts",current_timestamp())
+                    .withColumn("effective_end_ts",current_timestamp())
+                    .withColumn("insert_dt", current_date())
+                    .withColumn("insert_ts", current_timestamp())
+                    .withColumn("batch_id", lit(BATCH_ID))
+                    .withColumn("is_current", lit('Y'))
+                    .withColumn("checksum", self.compute_row_hash(csv_data))
+                )
+                # Write into Delta table 
+                updated_csv_data.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(self.TARGET_TABLE)
+
+            if self.LOAD_TYPE == 'incremental':
+                df = csv_data.withColumns({
+                        'effective_start_ts': current_timestamp(),
+                        'effective_end_ts': current_timestamp(),
+                        'insert_dt': current_date(),
+                        'insert_ts': current_timestamp(),
+                        'batch_id': lit(BATCH_ID),
+                        'is_current': lit('Y') ,
+                        'checksum': self.compute_row_hash(csv_data)
+                })
+
+                delta_table = DeltaTable.forName(spark, self.TARGET_TABLE)
+
+                current_active = delta_table.toDF().filter(col('is_current') == 'Y').select('patient_id', 'checksum').withColumnRenamed('checksum', 'old_checksum').withColumnRenamed('patient_id', 'target_patient_id')
+                comparison = (df.alias('src').join(current_active.alias('target'), col('src.patient_id')==col  ('target.target_patient_id'), 'left')
+                              .withColumn('action', 
+                                    when(col('target.target_patient_id').isNull(), lit('INSERT'))
+                                    .when(col('src.checksum') != col('target.old_checksum'), lit('UPDATE'))
+                                    .otherwise(lit('NO_CHANGE')))
+                )
+
+                # Check for insert and update recods
+                to_insert = comparison.filter(col('action').isin('INSERT', 'UPDATE')).select('src.*')
+                to_expire = comparison.filter(col('action') == 'UPDATE')
+
+                logger.info(f'Inserting/Updating: {to_insert.count()} records')
+                logger.info(f'Old Version: {to_expire.count()} records')
+
+                # Step 1: Expire all the old version, keep them in the table and mark them as 'N'
+                if to_expire.count() > 0:
+                    logger.info(f'Expiring {to_expire.count()} records')
+                    delta_table.alias('target').merge(
+                        source = to_expire.alias('src'),
+                        condition = "target.patient_id = src.patient_id and target.is_current='Y'"
+                    ).whenMatchedUpdate(
+                        set = {
+                            'is_current': lit('N'),
+                            'effective_end_ts': current_timestamp()
+                        }
+                    ).execute()
+
+                # Step 2: Insert new records 
+                if to_insert.count() > 0:
+                    logger.info(f'Inserting {to_insert.count()} records')
+                    delta_table.alias('target').merge(
+                        to_insert.alias('src'),
+                        col('target.patient_id') != col('src.patient_id')
+                    ).whenNotMatchedInsertAll().execute()
+
+                # Step 3: Insert Updated records
+
+                if to_insert.count() > 0:
+                    logger.info(f'Updating {to_insert.count()} records')
+                    delta_table.alias('target').merge(
+                        source = to_insert.alias('src'),
+                        condition = expr('1=0') # never match --> force insert
+                    ).whenNotMatchedInsertAll().execute()
+
+
+            logger.info(f"Data written to table {self.TARGET_TABLE}")
+            # Log success
+            write_log(self.JOB_NAME, "csv", self.TARGET_TABLE, "Sucess", BATCH_ID)
+        except Exception as e:
+            logger.error(f"Error: {str(e)}")
+            # Log failure
+            write_error(str(e), "write csv data", BATCH_ID)
+
+# job_name = dbutils.widgets.get('job_name')
+job_name = "injest_lab_results_data"
+etl = ETL_FRAMEWORK(job_name)
