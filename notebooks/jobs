@@ -1,0 +1,230 @@
+%run ./common_functions
+
+#modules import
+
+from pyspark.sql.functions import current_date, current_timestamp, lit
+
+#execute job statements
+
+def check_table_availability(table_name):
+    return spark.catalog.tableExists(table_name)
+
+# ---------------------------------------------------------------------------------------------
+    
+def job_exists(job_name, table_name):
+    try:
+        df_jobname = spark.sql(f"""select * from {table_name} where job_name = '{job_name}' """).count() == 0
+        return df_jobname
+    except Exception as e:
+        logger.error(f"Error checking job existence: {e}")
+
+# ---------------------------------------------------------------------------------------------
+
+def rewrite_env(table_name, config_data):
+    env = dbutils.widgets.get('env')
+    table_name = table_name.replace('{env}', env)
+    config_data = [i.replace('{env}', env) for i in config_data]
+    return table_name, config_data
+
+# ---------------------------------------------------------------------------------------------
+
+def insert_config(job_name, table_name, execute_type, config_columns, config_data):
+
+    table_name, config_data = rewrite_env(table_name, config_data)
+    table_exists = check_table_availability(table_name)
+    job_names = job_exists(job_name, table_name)
+    if execute_type == 'insert':
+        if table_exists:
+            if job_names:
+                try:
+                    df = spark.createDataFrame([config_data], config_columns)
+                    updated_df = df.withColumns({
+                        'insert_dt': current_date(),
+                        'insert_ts': current_timestamp(),
+                        'batch_id': lit(BATCH_ID)
+                    })
+                    updated_df.write.format('delta').mode('append').saveAsTable('dbdemos2.demo_cdp_test.config')
+                    logger.info(f'SQL executed successfully ')
+                    write_log(job_name, 'csv', table_name, 'Success', BATCH_ID)
+                
+                except Exception as e:
+                    logger.error(f"Error executing SQL: {e}")
+                    write_error(str(e), 'insert-->job_names', BATCH_ID)
+            else:
+                logger.info("Job already exists")
+                
+        else:
+            logger.info("Table does not exist")
+
+
+    elif execute_type == 'update':
+        if table_exists:
+            if not job_names:
+                try:
+                    df = spark.createDataFrame([config_data], config_columns)
+                    updated_df = df.withColumns({
+                        'insert_dt': current_date(),
+                        'insert_ts': current_timestamp(),
+                        'batch_id': lit(BATCH_ID)
+                    })
+                    updated_df.write.format('delta').mode('append').saveAsTable('dbdemos2.demo_cdp_test.config')
+                    # spark.sql(config_data)
+                    logger.info(f'SQL executed successfully ')
+                    write_log(job_name, 'csv', table_name, 'Success', batch_id)
+                    
+                except Exception as e:
+                    logger.error(f"Error executing SQL: {e}")
+                    write_error(str(e), 'update-->job_names', BATCH_ID)
+            else:
+                logger.info("Job already exists")
+        else:
+            logger.info("Table does not exist")
+
+
+#patients sql table
+
+
+config_columns = ['job_name', 'target_table', 'sql_path', 'load_type', 'source_type', 'file_name', 'json_path', 'data_quality_flag', 'data_quality_sql', 'vaccum_flag']
+config_data = (
+    'injest_patients_data',
+    'dbdemos2.demo_cdp_{env}.patients',
+    '',
+    'incremental',
+    'csv',
+    'patients_full.csv',
+    '/Volumes/dbdemos2/demo_cdp_test/config/patients.json',
+    'N',
+    '',
+    'Y'
+)
+
+table_name = "dbdemos2.demo_cdp_{env}.config"
+job_name = "injest_patients_data"
+execute_type = 'insert'
+insert_config(job_name, table_name, execute_type, config_columns, config_data)
+
+
+%sql
+select * from dbdemos2.demo_cdp_test.config
+where job_name = 'injest_patients_data'
+
+
+#test jobs
+
+# Test Job
+config_columns = ['job_name', 'target_table', 'sql_path', 'load_type', 'source_type', 'file_name', 'json_path', 'data_quality_flag', 'data_quality_sql', 'vaccum_flag']
+config_data = (
+    'injest_patients_updated_test_data',
+    'dbdemos2.demo_cdp_{env}.patients',
+    '',
+    'incremental',
+    'csv',
+    'patients_updated_increment_test.csv',
+    '/Volumes/dbdemos2/demo_cdp_test/config/patients_updated_test.json',
+    'N',
+    '',
+    'Y'
+)
+
+table_name = "dbdemos2.demo_cdp_{env}.config"
+job_name = "injest_patients_updated_test_data"
+execute_type = 'insert'
+insert_config(job_name, table_name, execute_type, config_columns, config_data)
+
+
+#lab results sql
+
+config_columns = ['job_name', 'target_table', 'sql_path', 'load_type', 'source_type', 'file_name', 'json_path', 'data_quality_flag', 'data_quality_sql', 'vaccum_flag']
+config_data = (
+    'injest_lab_results_data',
+    'dbdemos2.demo_cdp_{env}.labs',
+    '',
+    'full',
+    'csv',
+    'labs_full.csv',
+    '/Volumes/dbdemos2/demo_cdp_test/config/labs.json',
+    'N',
+    '',
+    'Y'
+)
+table_name = "dbdemos2.demo_cdp_{env}.config"
+job_name = "injest_lab_results_data"
+execute_type = 'insert'
+insert_config(job_name, table_name, execute_type, config_columns, config_data)
+
+
+#claims sql
+
+config_columns = ['job_name', 'target_table', 'sql_path', 'load_type', 'source_type', 'file_name', 'json_path', 'data_quality_flag', 'data_quality_sql', 'vaccum_flag']
+config_data = (
+    'injest_claims_data',
+    'dbdemos2.demo_cdp_{env}.claims',
+    '',
+    'full',
+    'csv',
+    'claims_full.csv',
+    '/Volumes/dbdemos2/demo_cdp_test/config/claims.json',
+    'N',
+    '',
+    'Y'
+)
+table_name = "dbdemos2.demo_cdp_{env}.config"
+job_name = "injest_claims_data"
+execute_type = 'insert'
+insert_config(job_name, table_name, execute_type, config_columns, config_data)
+
+
+#stage table
+
+
+config_columns = ['job_name', 'target_table', 'sql_path', 'load_type', 'source_type', 'file_name', 'json_path', 'data_quality_flag', 'data_quality_sql', 'vaccum_flag']
+config_data = (
+    'customer_data_stage',
+    'dbdemos2.demo_cdp_{env}.customer_data_stage',
+    '/Workspace/Shared/Mini Project November/sql/customer_stage.sql',
+    'full',
+    '',
+    '',
+    '',
+    'Y',
+    '/Workspace/Shared/Mini Project November/sql/stage_data_quality.sql',
+    'Y'
+)
+
+table_name = "dbdemos2.demo_cdp_{env}.config"
+job_name = 'customer_data_stage'
+execute_type = 'insert'
+insert_config(job_name, table_name, execute_type, config_columns, config_data)
+
+
+#customer history table
+
+
+config_columns = ['job_name', 'target_table', 'sql_path', 'load_type', 'source_type', 'file_name', 'json_path', 'data_quality_flag', 'data_quality_sql', 'vaccum_flag']
+config_data = (
+    'customer_data_history',
+    'dbdemos2.demo_cdp_{env}.customer_data_history',
+    '/Workspace/Shared/Mini Project November/sql/customer_history.sql',
+    'incremental',
+    '',
+    '',
+    '',
+    'N',
+    '',
+    'Y'
+)    
+table_name = "dbdemos2.demo_cdp_{env}.config"
+job_name = 'customer_data_history'
+execute_type = 'insert'
+insert_config(job_name, table_name, execute_type, config_columns, config_data)
+
+
+%sql
+select * from dbdemos2.demo_cdp_test.patients;
+
+
+%sql
+-- truncate table dbdemos2.demo_cdp_test.config;
+select * from dbdemos2.demo_cdp_test.config;
+
+
